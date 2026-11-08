@@ -108,4 +108,106 @@ func TestConsolidateAutomationPoliciesSpecificity(t *testing.T) {
 			t.Fatalf("expected error for conflicting policies, got nil")
 		}
 	})
+
+	t.Run("disjoint policies maintain declaration order", func(t *testing.T) {
+		p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"alpha.example.com"}, KeyType: "ed25519"}
+		p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"beta.example.org"}, KeyType: "rsa2048"}
+		p3 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"gamma.example.net"}, KeyType: "rsa4096"}
+
+		res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p1, p2, p3})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 3 || res[0] != p1 || res[1] != p2 || res[2] != p3 {
+			t.Fatalf("expected order [p1, p2, p3], got %v", res)
+		}
+
+		resRev, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p3, p2, p1})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resRev) != 3 || resRev[0] != p3 || resRev[1] != p2 || resRev[2] != p1 {
+			t.Fatalf("expected order [p3, p2, p1], got %v", resRev)
+		}
+	})
+
+	t.Run("disjoint interleaved with specific and wildcard", func(t *testing.T) {
+		pWildcard := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com"}, KeyType: "rsa2048"}
+		pDisjoint1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"unrelated.org"}, KeyType: "ed25519"}
+		pSpecific := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com"}, KeyType: "rsa4096"}
+		pDisjoint2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"another.net"}, KeyType: "p256"}
+
+		res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{pWildcard, pDisjoint1, pSpecific, pDisjoint2})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 4 {
+			t.Fatalf("expected 4 policies, got %d", len(res))
+		}
+		if res[0] != pDisjoint1 || res[1] != pSpecific || res[2] != pWildcard || res[3] != pDisjoint2 {
+			t.Fatalf("expected [pDisjoint1, pSpecific, pWildcard, pDisjoint2], got %v", res)
+		}
+	})
+
+	t.Run("exact wildcard catchall specificity hierarchy", func(t *testing.T) {
+		pCatchAll := &caddytls.AutomationPolicy{SubjectsRaw: nil, KeyType: "p256"}
+		pWildcard := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com"}, KeyType: "rsa2048"}
+		pExact := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com"}, KeyType: "ed25519"}
+
+		res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{pCatchAll, pWildcard, pExact})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("expected 3 policies, got %d", len(res))
+		}
+		if res[0] != pExact || res[1] != pWildcard || res[2] != pCatchAll {
+			t.Fatalf("expected [pExact, pWildcard, pCatchAll], got %v", res)
+		}
+	})
+
+	t.Run("partial overlaps with disjoint elements", func(t *testing.T) {
+		pWildcard := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.a.com", "shared-disjoint.org"}, KeyType: "rsa2048"}
+		pExact := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.a.com", "other-disjoint.org"}, KeyType: "ed25519"}
+		pUnrelated := &caddytls.AutomationPolicy{SubjectsRaw: []string{"completely-unrelated.com"}, KeyType: "p384"}
+
+		res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{pWildcard, pExact, pUnrelated})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("expected 3 policies, got %d", len(res))
+		}
+		if res[0] != pExact || res[1] != pWildcard || res[2] != pUnrelated {
+			t.Fatalf("expected [pExact, pWildcard, pUnrelated], got %v", res)
+		}
+	})
+
+	t.Run("cyclic dependency among three policies returns error", func(t *testing.T) {
+		pA := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.a.com", "*.c.com"}}
+		pB := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.b.com", "*.a.com"}}
+		pC := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.c.com", "*.b.com"}}
+
+		_, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{pA, pB, pC})
+		if err == nil {
+			t.Fatalf("expected error for cyclic specificity dependency, got nil")
+		}
+	})
+
+	t.Run("deterministic ordering across repeated runs", func(t *testing.T) {
+		for i := 0; i < 50; i++ {
+			p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com"}, KeyType: "rsa2048"}
+			p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"unrelated.org"}, KeyType: "ed25519"}
+			p3 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com"}, KeyType: "rsa4096"}
+			p4 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"another.net"}, KeyType: "p256"}
+
+			res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p1, p2, p3, p4})
+			if err != nil {
+				t.Fatalf("run %d: unexpected error: %v", i, err)
+			}
+			if len(res) != 4 || res[0] != p2 || res[1] != p3 || res[2] != p1 || res[3] != p4 {
+				t.Fatalf("run %d: nondeterministic result: %v", i, res)
+			}
+		}
+	})
 }
