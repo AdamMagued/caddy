@@ -1177,57 +1177,7 @@ outer:
 // by pairwise specificity constraints. Disjoint or incomparable policies preserve
 // their original declaration order.
 func sortAutomationPoliciesBySpecificity(aps []*caddytls.AutomationPolicy) ([]*caddytls.AutomationPolicy, error) {
-	n := len(aps)
-	if n <= 1 {
-		return aps, nil
-	}
-
-	adj := make([][]int, n)
-	inDegree := make([]int, n)
-
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			cmp, err := caddytls.CompareAutomationPolicies(aps[i], aps[j])
-			if err != nil {
-				return nil, err
-			}
-			switch {
-			case cmp < 0:
-				// aps[i] is more specific than aps[j]; aps[i] must precede aps[j]
-				adj[i] = append(adj[i], j)
-				inDegree[j]++
-			case cmp > 0:
-				// aps[j] is more specific than aps[i]; aps[j] must precede aps[i]
-				adj[j] = append(adj[j], i)
-				inDegree[i]++
-			}
-		}
-	}
-
-	sorted := make([]*caddytls.AutomationPolicy, 0, n)
-	visited := make([]bool, n)
-
-	for step := 0; step < n; step++ {
-		next := -1
-		for i := 0; i < n; i++ {
-			if !visited[i] && inDegree[i] == 0 {
-				next = i
-				break
-			}
-		}
-		if next == -1 {
-			return nil, fmt.Errorf("ambiguous automation policies: overlapping subjects require conflicting ordering")
-		}
-
-		visited[next] = true
-		sorted = append(sorted, aps[next])
-
-		for _, neighbor := range adj[next] {
-			inDegree[neighbor]--
-		}
-	}
-
-	return sorted, nil
+	return caddytls.SortAutomationPoliciesBySpecificity(aps)
 }
 
 // automationPolicyIsSubset returns true if a's subjects are a subset

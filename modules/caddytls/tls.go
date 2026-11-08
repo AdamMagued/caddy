@@ -866,31 +866,13 @@ func (t *TLS) AddAutomationPolicy(ap *AutomationPolicy) error {
 		return err
 	}
 
-	minIdx := 0
-	maxIdx := len(t.Automation.Policies)
-
-	for i, existing := range t.Automation.Policies {
-		cmp, err := CompareAutomationPolicies(ap, existing)
-		if err != nil {
-			return err
-		}
-		switch {
-		case cmp < 0:
-			if i < maxIdx {
-				maxIdx = i
-			}
-		case cmp > 0:
-			if i+1 > minIdx {
-				minIdx = i + 1
-			}
-		}
+	policies := append(slices.Clone(t.Automation.Policies), ap)
+	sorted, err := SortAutomationPoliciesBySpecificity(policies)
+	if err != nil {
+		return err
 	}
 
-	if minIdx > maxIdx {
-		return fmt.Errorf("ambiguous automation policies: overlapping subjects require conflicting ordering")
-	}
-
-	t.Automation.Policies = slices.Insert(t.Automation.Policies, maxIdx, ap)
+	t.Automation.Policies = sorted
 	return nil
 }
 
