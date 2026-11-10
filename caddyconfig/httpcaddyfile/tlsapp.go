@@ -1069,6 +1069,32 @@ func newBaseAutomationPolicy(
 // consolidateAutomationPolicies combines automation policies that are the same,
 // for a cleaner overall output.
 func consolidateAutomationPolicies(aps []*caddytls.AutomationPolicy) ([]*caddytls.AutomationPolicy, error) {
+	// Consolidate merge-equivalent policies that can be combined without shadowing issues
+	// before validating topological ordering. This ensures merge-equivalent crossed policies
+	// are merged rather than falsely rejected as specificity cycles.
+outerPreMerge:
+	for i := 0; i < len(aps); i++ {
+		for j := i + 1; j < len(aps); j++ {
+			if reflect.DeepEqual(aps[i], aps[j]) {
+				aps = slices.Delete(aps, j, j+1)
+				i--
+				continue outerPreMerge
+			}
+			if len(aps[i].SubjectsRaw) > 0 && len(aps[j].SubjectsRaw) > 0 &&
+				automationPoliciesAreMergeEquivalent(aps[i], aps[j]) &&
+				!automationPolicyMergeShadows(i, j, aps) {
+				for _, subj := range aps[j].SubjectsRaw {
+					if !slices.Contains(aps[i].SubjectsRaw, subj) {
+						aps[i].SubjectsRaw = append(aps[i].SubjectsRaw, subj)
+					}
+				}
+				aps = slices.Delete(aps, j, j+1)
+				i--
+				continue outerPreMerge
+			}
+		}
+	}
+
 	var err error
 	aps, err = sortAutomationPoliciesBySpecificity(aps)
 	if err != nil {
@@ -1133,14 +1159,7 @@ outer:
 			// otherwise the one without any subjects (a catch-all) would be
 			// eaten up by the one with subjects; and if both have subjects, we
 			// need to combine their lists
-			if automationPoliciesHaveSameIssuers(aps[i], aps[j]) &&
-				reflect.DeepEqual(aps[i].ManagersRaw, aps[j].ManagersRaw) &&
-				bytes.Equal(aps[i].StorageRaw, aps[j].StorageRaw) &&
-				aps[i].MustStaple == aps[j].MustStaple &&
-				aps[i].KeyType == aps[j].KeyType &&
-				aps[i].OnDemand == aps[j].OnDemand &&
-				aps[i].ReusePrivateKeys == aps[j].ReusePrivateKeys &&
-				aps[i].RenewalWindowRatio == aps[j].RenewalWindowRatio {
+			if automationPoliciesAreMergeEquivalent(aps[i], aps[j]) {
 				if len(aps[i].SubjectsRaw) > 0 && len(aps[j].SubjectsRaw) == 0 {
 					// later policy (at j) has no subjects ("catch-all"), so we can
 					// remove the identical-but-more-specific policy that comes first
@@ -1262,6 +1281,17 @@ func subjectQualifiesForPublicCert(ap *caddytls.AutomationPolicy, subj string) b
 	return !certmagic.SubjectIsIP(subj) &&
 		!certmagic.SubjectIsInternal(subj) &&
 		(strings.Count(subj, "*.") < 2 || ap.OnDemand)
+}
+
+func automationPoliciesAreMergeEquivalent(a, b *caddytls.AutomationPolicy) bool {
+	return automationPoliciesHaveSameIssuers(a, b) &&
+		reflect.DeepEqual(a.ManagersRaw, b.ManagersRaw) &&
+		bytes.Equal(a.StorageRaw, b.StorageRaw) &&
+		a.MustStaple == b.MustStaple &&
+		a.KeyType == b.KeyType &&
+		a.OnDemand == b.OnDemand &&
+		a.ReusePrivateKeys == b.ReusePrivateKeys &&
+		a.RenewalWindowRatio == b.RenewalWindowRatio
 }
 
 func automationPoliciesHaveSameIssuers(a, b *caddytls.AutomationPolicy) bool {

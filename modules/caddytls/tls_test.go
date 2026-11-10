@@ -112,10 +112,12 @@ func TestAddAutomationPolicy_AcyclicTopologicalOrdering(t *testing.T) {
 }
 
 func TestAddAutomationPolicy_CyclicDependencies(t *testing.T) {
-	t.Run("direct two-policy cycle", func(t *testing.T) {
+	t.Run("direct two-policy cycle with different configurations", func(t *testing.T) {
 		tlsApp := newTestTLSApp(t)
 		p1 := newTestPolicy(t, []string{"foo.example.com", "*.other.com"})
+		p1.KeyType = "rsa2048"
 		p2 := newTestPolicy(t, []string{"*.example.com", "bar.other.com"})
+		p2.KeyType = "ed25519"
 
 		if err := tlsApp.AddAutomationPolicy(p1); err != nil {
 			t.Fatalf("adding policy 1: %v", err)
@@ -129,15 +131,18 @@ func TestAddAutomationPolicy_CyclicDependencies(t *testing.T) {
 		}
 	})
 
-	t.Run("indirect three-policy cycle", func(t *testing.T) {
+	t.Run("indirect three-policy cycle with different configurations", func(t *testing.T) {
 		// P1 is more specific than P3 on a.com
 		// P2 is more specific than P1 on b.com
 		// P3 is more specific than P2 on c.com
 		// Cycle: P1 -> P3 -> P2 -> P1
 		tlsApp := newTestTLSApp(t)
 		p1 := newTestPolicy(t, []string{"foo.a.com", "*.b.com"})
+		p1.KeyType = "rsa2048"
 		p2 := newTestPolicy(t, []string{"foo.b.com", "*.c.com"})
+		p2.KeyType = "ed25519"
 		p3 := newTestPolicy(t, []string{"foo.c.com", "*.a.com"})
+		p3.KeyType = "p256"
 
 		if err := tlsApp.AddAutomationPolicy(p1); err != nil {
 			t.Fatalf("adding policy 1: %v", err)

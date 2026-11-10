@@ -1,6 +1,7 @@
 package httpcaddyfile
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -99,13 +100,62 @@ func TestConsolidateAutomationPoliciesSpecificity(t *testing.T) {
 		}
 	})
 
-	t.Run("bidirectional conflict returns error", func(t *testing.T) {
-		p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com", "*.other.com"}}
-		p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com", "bar.other.com"}}
+	t.Run("merge-equivalent crossed policies consolidate without error", func(t *testing.T) {
+		t.Run("empty policies", func(t *testing.T) {
+			p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com", "*.other.com"}}
+			p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com", "bar.other.com"}}
+
+			res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p1, p2})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// Empty policies are cleaned up by auto-HTTPS
+			if res != nil {
+				t.Fatalf("expected nil for all-empty policies, got %v", res)
+			}
+		})
+
+		t.Run("configured policies", func(t *testing.T) {
+			p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com", "*.other.com"}, KeyType: "rsa2048"}
+			p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com", "bar.other.com"}, KeyType: "rsa2048"}
+
+			res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p1, p2})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(res) != 1 {
+				t.Fatalf("expected 1 consolidated policy, got %d", len(res))
+			}
+			if res[0].KeyType != "rsa2048" {
+				t.Errorf("expected KeyType rsa2048, got %s", res[0].KeyType)
+			}
+			expectedSubjs := []string{"foo.example.com", "*.other.com", "*.example.com", "bar.other.com"}
+			for _, exp := range expectedSubjs {
+				if !slices.Contains(res[0].SubjectsRaw, exp) {
+					t.Errorf("expected subject %s in consolidated policy, got %v", exp, res[0].SubjectsRaw)
+				}
+			}
+		})
+	})
+
+	t.Run("bidirectional conflict with different configurations returns error", func(t *testing.T) {
+		p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com", "*.other.com"}, KeyType: "rsa2048"}
+		p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com", "bar.other.com"}, KeyType: "ed25519"}
 
 		_, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p1, p2})
 		if err == nil {
-			t.Fatalf("expected error for conflicting policies, got nil")
+			t.Fatalf("expected error for conflicting policies with different configurations, got nil")
+		}
+	})
+
+	t.Run("merge-equivalent crossed policies that shadow intermediate policy returns error", func(t *testing.T) {
+		p1 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"foo.example.com", "*.other.com"}, KeyType: "rsa2048"}
+		p2 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"baz.example.com"}, KeyType: "ed25519"}
+		p3 := &caddytls.AutomationPolicy{SubjectsRaw: []string{"*.example.com", "bar.other.com"}, KeyType: "rsa2048"}
+
+		_, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{p1, p2, p3})
+		if err == nil {
+			t.Fatalf("expected error when merge would shadow intermediate policy, got nil")
 		}
 	})
 
@@ -183,10 +233,33 @@ func TestConsolidateAutomationPoliciesSpecificity(t *testing.T) {
 		}
 	})
 
-	t.Run("cyclic dependency among three policies returns error", func(t *testing.T) {
-		pA := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.a.com", "*.c.com"}}
-		pB := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.b.com", "*.a.com"}}
-		pC := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.c.com", "*.b.com"}}
+	t.Run("cyclic dependency among three merge-equivalent policies consolidates without error", func(t *testing.T) {
+		pA := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.a.com", "*.c.com"}, KeyType: "rsa2048"}
+		pB := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.b.com", "*.a.com"}, KeyType: "rsa2048"}
+		pC := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.c.com", "*.b.com"}, KeyType: "rsa2048"}
+
+		res, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{pA, pB, pC})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("expected 1 consolidated policy, got %d", len(res))
+		}
+		if res[0].KeyType != "rsa2048" {
+			t.Errorf("expected KeyType rsa2048, got %s", res[0].KeyType)
+		}
+		expectedSubjs := []string{"sub.a.com", "*.c.com", "sub.b.com", "*.a.com", "sub.c.com", "*.b.com"}
+		for _, exp := range expectedSubjs {
+			if !slices.Contains(res[0].SubjectsRaw, exp) {
+				t.Errorf("expected subject %s in consolidated policy, got %v", exp, res[0].SubjectsRaw)
+			}
+		}
+	})
+
+	t.Run("cyclic dependency among three policies with different configurations returns error", func(t *testing.T) {
+		pA := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.a.com", "*.c.com"}, KeyType: "rsa2048"}
+		pB := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.b.com", "*.a.com"}, KeyType: "ed25519"}
+		pC := &caddytls.AutomationPolicy{SubjectsRaw: []string{"sub.c.com", "*.b.com"}, KeyType: "p256"}
 
 		_, err := consolidateAutomationPolicies([]*caddytls.AutomationPolicy{pA, pB, pC})
 		if err == nil {
@@ -211,3 +284,46 @@ func TestConsolidateAutomationPoliciesSpecificity(t *testing.T) {
 		}
 	})
 }
+
+func TestConsolidateAutomationPoliciesCaddyfileAdapt(t *testing.T) {
+	t.Run("merge-equivalent crossed site blocks adapt cleanly", func(t *testing.T) {
+		input := `foo.example.com, *.other.com {
+	tls {
+		key_type rsa2048
+	}
+}
+
+*.example.com, bar.other.com {
+	tls {
+		key_type rsa2048
+	}
+}
+`
+		adapter := caddyfile.Adapter{ServerType: ServerType{}}
+		_, _, err := adapter.Adapt([]byte(input), nil)
+		if err != nil {
+			t.Fatalf("unexpected error adapting merge-equivalent crossed site blocks: %v", err)
+		}
+	})
+
+	t.Run("conflicting crossed site blocks fail adapt", func(t *testing.T) {
+		input := `foo.example.com, *.other.com {
+	tls {
+		key_type rsa2048
+	}
+}
+
+*.example.com, bar.other.com {
+	tls {
+		key_type ed25519
+	}
+}
+`
+		adapter := caddyfile.Adapter{ServerType: ServerType{}}
+		_, _, err := adapter.Adapt([]byte(input), nil)
+		if err == nil {
+			t.Fatalf("expected error adapting conflicting crossed site blocks, got nil")
+		}
+	})
+}
+
