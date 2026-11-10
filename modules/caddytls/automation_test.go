@@ -397,3 +397,66 @@ func TestAddAutomationPolicy_SpecificityChain(t *testing.T) {
 		}
 	}
 }
+
+func TestSortAutomationPoliciesBySpecificity(t *testing.T) {
+	t.Run("nil and single policy", func(t *testing.T) {
+		res, err := SortAutomationPoliciesBySpecificity(nil)
+		if err != nil {
+			t.Fatalf("unexpected error on nil slice: %v", err)
+		}
+		if res != nil {
+			t.Fatalf("expected nil slice, got %v", res)
+		}
+
+		single := []*AutomationPolicy{{SubjectsRaw: []string{"example.com"}}}
+		res, err = SortAutomationPoliciesBySpecificity(single)
+		if err != nil {
+			t.Fatalf("unexpected error on single slice: %v", err)
+		}
+		if len(res) != 1 || res[0] != single[0] {
+			t.Fatalf("expected single policy returned as-is")
+		}
+	})
+
+	t.Run("orders from most specific to least specific", func(t *testing.T) {
+		pExact := &AutomationPolicy{SubjectsRaw: []string{"foo.example.com"}}
+		pWildcard := &AutomationPolicy{SubjectsRaw: []string{"*.example.com"}}
+		pCatchAll := &AutomationPolicy{}
+
+		input := []*AutomationPolicy{pCatchAll, pWildcard, pExact}
+		sorted, err := SortAutomationPoliciesBySpecificity(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sorted) != 3 {
+			t.Fatalf("expected 3 policies, got %d", len(sorted))
+		}
+		if sorted[0] != pExact || sorted[1] != pWildcard || sorted[2] != pCatchAll {
+			t.Errorf("unexpected ordering: got %v", sorted)
+		}
+	})
+
+	t.Run("preserves declaration order for disjoint policies", func(t *testing.T) {
+		p1 := &AutomationPolicy{SubjectsRaw: []string{"a.com"}}
+		p2 := &AutomationPolicy{SubjectsRaw: []string{"b.com"}}
+		p3 := &AutomationPolicy{SubjectsRaw: []string{"c.com"}}
+
+		sorted, err := SortAutomationPoliciesBySpecificity([]*AutomationPolicy{p1, p2, p3})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if sorted[0] != p1 || sorted[1] != p2 || sorted[2] != p3 {
+			t.Errorf("expected preserved order [p1, p2, p3], got %v", sorted)
+		}
+	})
+
+	t.Run("returns error on conflicting cycle", func(t *testing.T) {
+		p1 := &AutomationPolicy{SubjectsRaw: []string{"foo.example.com", "*.other.com"}}
+		p2 := &AutomationPolicy{SubjectsRaw: []string{"*.example.com", "bar.other.com"}}
+
+		_, err := SortAutomationPoliciesBySpecificity([]*AutomationPolicy{p1, p2})
+		if err == nil {
+			t.Fatal("expected error on cycle, got nil")
+		}
+	})
+}

@@ -730,9 +730,3 @@ func SortAutomationPoliciesBySpecificity(aps []*AutomationPolicy) ([]*Automation
 
 	return sorted, nil
 }
-
-// TopologicalSortAutomationPolicies orders automation policies using a stable topological sort.
-// It is equivalent to SortAutomationPoliciesBySpecificity.
-func TopologicalSortAutomationPolicies(aps []*AutomationPolicy) ([]*AutomationPolicy, error) {
-	return SortAutomationPoliciesBySpecificity(aps)
-}
